@@ -1,1 +1,98 @@
+name: Build web export templates
 
+on:
+  workflow_dispatch:
+    inputs:
+      godot_version:
+        description: "Godot tag to build (must match your editor version)"
+        default: "4.6.2-stable"
+        required: true
+      profile:
+        description: "Profile file in profiles/ (without .py)"
+        default: "2d_web"
+        required: true
+      build_debug:
+        description: "Also build the debug template"
+        type: boolean
+        default: false
+      extra_flags:
+        description: "Extra scons flags, e.g. module_regex_enabled=no"
+        default: ""
+        required: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    env:
+      TAG: ${{ inputs.godot_version }}-${{ inputs.profile }}
+    steps:
+      - name: Checkout this repo
+        uses: actions/checkout@v4
+
+      - name: Checkout Godot ${{ inputs.godot_version }}
+        uses: actions/checkout@v4
+        with:
+          repository: godotengine/godot
+          ref: ${{ inputs.godot_version }}
+          path: godot
+
+      - name: Read Emscripten version used by Godot CI
+        id: em
+        run: |
+          v=$(grep -m1 -oP 'EM_VERSION:\s*\K[0-9.]+' godot/.github/workflows/web_builds.yml)
+          echo "Emscripten $v"
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Emscripten
+        uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: ${{ steps.em.outputs.version }}
+          no-cache: true
+
+      - name: Set up Python and SCons
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install scons
+
+      - name: Build release template
+        working-directory: godot
+        run: |
+          scons platform=web target=template_release threads=no \
+            production=yes optimize=size_extra lto=full debug_symbols=no \
+            use_closure_compiler=yes \
+            profile=../profiles/${{ inputs.profile }}.py ${{ inputs.extra_flags }}
+          ls -la bin; cp bin/godot.web.template_release*.zip ../web_nothreads_release.zip
+
+      - name: Build debug template
+        if: inputs.build_debug
+        working-directory: godot
+        run: |
+          scons platform=web target=template_debug threads=no \
+            optimize=size_extra debug_symbols=no \
+            profile=../profiles/${{ inputs.profile }}.py ${{ inputs.extra_flags }}
+          cp bin/godot.web.template_debug*.zip ../web_nothreads_debug.zip
+
+      - name: Report sizes
+        run: |
+          for z in web_nothreads_*.zip; do
+            echo "== $z"; unzip -l "$z"
+          done
+          wasm=$(unzip -l web_nothreads_release.zip | awk '/\.wasm$/{print $1}')
+          echo "Release wasm: $wasm bytes ($((wasm/1048576)) MiB)"
+          if [ "$wasm" -gt 31457280 ]; then echo "::warning::wasm is over 30 MiB"; fi
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="Godot ${{ inputs.godot_version }} web template (no threads), profile ${{ inputs.profile }}. Flags: ${{ inputs.extra_flags }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" web_nothreads_*.zip --clobber
+          else
+            gh release create "$TAG" web_nothreads_*.zip --title "$TAG" --notes "$notes"
+          fi
