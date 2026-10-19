@@ -8,7 +8,7 @@ disable_physics_3d = "yes"
 disable_navigation_3d = "yes"
 disable_navigation_2d = "yes"
 disable_xr = "yes"
-deprecated = "no"
+deprecated = "no"   # removes old APIs (e.g. Image.create -> use Image.create_empty); scripts using them fail ONLY in the web build
 
 # Simple text server (no ICU). Fine for Latin/Vietnamese text without complex shaping.
 module_text_server_adv_enabled = "no"
